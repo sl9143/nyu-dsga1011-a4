@@ -9,6 +9,7 @@ import wandb
 
 from t5_utils import initialize_model, initialize_optimizer_and_scheduler, save_model, load_model_from_checkpoint, setup_wandb
 from transformers import GenerationConfig
+from transformers import T5TokenizerFast
 from load_data import load_t5_data
 from utils import compute_metrics, save_queries_and_records
 
@@ -138,16 +139,80 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     should both provide good results. If you find that this component of evaluation takes too long with your compute,
     we found the cross-entropy loss (in the evaluation set) to be well (albeit imperfectly) correlated with F1 performance.
     '''
-    # TODO
     model.eval()
-    return 0, 0, 0, 0, 0
+    tokenizer = T5TokenizerFast.from_pretrained("google-t5/t5-small")
+    bos_id = tokenizer.convert_tokens_to_ids("<extra_id_0>")
+    criterion = nn.CrossEntropyLoss(reduction="sum")
+    total_loss = 0.0
+    total_tokens = 0
+    queries = []
+
+    with torch.no_grad():
+        for batch in tqdm(dev_loader, desc="Dev evaluation"):
+            encoder_ids, encoder_mask, decoder_inputs, targets, starts = (
+                tensor.to(DEVICE) for tensor in batch
+            )
+            logits = model(
+                input_ids=encoder_ids,
+                attention_mask=encoder_mask,
+                decoder_input_ids=decoder_inputs,
+            ).logits
+            non_pad = targets != PAD_IDX
+            total_loss += criterion(logits[non_pad], targets[non_pad]).item()
+            total_tokens += non_pad.sum().item()
+            generated_ids = model.generate(
+                input_ids=encoder_ids, 
+                attention_mask=encoder_mask, 
+                decoder_input_ids=starts, 
+                decoder_start_token_id=bos_id, 
+                do_sample=False, 
+                num_beams=1, 
+                max_new_tokens=512
+                )
+            decoded_queries = tokenizer.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            queries.extend(query.replace("\r", " ").replace("\n", " ").strip() for query in decoded_queries)
+
+    for path in (model_sql_path, model_record_path):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    save_queries_and_records(queries, model_sql_path, model_record_path)
+    
+    sql_em, record_em, record_f1, errors = compute_metrics(gt_sql_pth, model_sql_path, gt_record_path, model_record_path)
+    error_rate = sum(bool(error) for error in errors) / len(queries)
+    eval_loss = total_loss / total_tokens
+
+    return eval_loss, record_f1, record_em, sql_em, error_rate
         
 def test_inference(args, model, test_loader, model_sql_path, model_record_path):
     '''
     You must implement inference to compute your model's generated SQL queries and its associated 
     database records. Implementation should be very similar to eval_epoch.
     '''
-    pass
+    model.eval()
+    tokenizer = T5TokenizerFast.from_pretrained("google-t5/t5-small")
+    bos_id = tokenizer.convert_tokens_to_ids("<extra_id_0>")
+    queries = []
+
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Test inference"):
+            encoder_ids, encoder_mask, starts = (tensor.to(DEVICE) for tensor in batch)
+            generated_ids = model.generate(
+                input_ids=encoder_ids,
+                attention_mask=encoder_mask,
+                decoder_input_ids=starts,
+                decoder_start_token_id=bos_id,
+                do_sample=False,
+                num_beams=1,
+                max_new_tokens=512
+                )
+            decoded_queries = tokenizer.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            queries.extend(query.replace("\r", " ").replace("\n", " ").strip() for query in decoded_queries)
+            
+    for path in (model_sql_path, model_record_path):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    save_queries_and_records(queries, model_sql_path, model_record_path)
+    
 
 def main():
     # Get key arguments

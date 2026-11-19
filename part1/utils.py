@@ -43,9 +43,33 @@ def custom_transform(example):
     # how you could implement two of them --- synonym replacement and typos.
 
     # You should update example["text"] using your transformation
-
-    raise NotImplementedError
-
+    text = example["text"].lower()
+    words = text.split()
+    
+    neighbors = {
+        "a": "qwszx",
+        "e": "wsdfr",
+        "i": "uojkl",
+        "o": "iklp",
+        "u": "yihjk",
+    }
+    
+    rng = random.Random(example["text"])
+    
+    for index, word in enumerate(words):
+        if len(word) < 5 or "'" in word or "’" in word:
+                    continue
+        
+        vowel_positions = [i for i, letter in enumerate(word) if letter in neighbors]
+        
+        if not vowel_positions or rng.random() >= 0.40:
+            continue
+        
+        i = rng.choice(vowel_positions)
+        replacement = rng.choice(neighbors[word[i]])
+        words[index] = word[:i] + replacement + word[i + 1:]     
+        
+    example["text"] =  " ".join(words)
     ##### YOUR CODE ENDS HERE ######
 
     return example

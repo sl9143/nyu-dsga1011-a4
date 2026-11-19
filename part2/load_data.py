@@ -26,16 +26,37 @@ class T5Dataset(Dataset):
               T5Tokenizer should serve that purpose.
             * Class behavior should be different on the test set.
         '''
-        # TODO
+        self.data_folder = data_folder
+        self.split = split
+
+        tokenizer = T5TokenizerFast.from_pretrained("google-t5/t5-small")
+        self.bos_id = tokenizer.convert_tokens_to_ids("<extra_id_0>")
+        self.examples = self.process_data(data_folder, split, tokenizer)
 
     def process_data(self, data_folder, split, tokenizer):
-        # TODO
+        
+        questions = load_lines(f"{data_folder}/{split}.nl")
+        question_ids = tokenizer(questions, add_special_tokens=True)["input_ids"]
+
+        if split == "test":
+            return [(ids, None, self.bos_id) for ids in question_ids]
+
+        queries = load_lines(f"{data_folder}/{split}.sql")
+
+        if len(questions) != len(queries):
+            raise ValueError(f"{split}: questions and SQL queries must pair by line")
+
+        query_ids = tokenizer(queries, add_special_tokens=True)["input_ids"]
+
+        return [(encoder_ids, target_ids, self.bos_id) for encoder_ids, target_ids in zip(question_ids, query_ids)]
     
     def __len__(self):
-        # TODO
+        
+        return len(self.examples)
 
     def __getitem__(self, idx):
-        # TODO
+        
+        return self.examples[idx]
 
 def normal_collate_fn(batch):
     '''
@@ -53,8 +74,33 @@ def normal_collate_fn(batch):
         * decoder_targets: The target tokens with which to train the decoder (the tokens following each decoder input)
         * initial_decoder_inputs: The very first input token to be decoder (only to be used in evaluation)
     '''
-    # TODO
-    return [], [], [], [], []
+    encoder_sequences = []
+    decoder_input_sequences = []
+    decoder_target_sequences = []
+    decoder_starts = []
+
+    for source_ids, target_ids, bos_id in batch:
+        encoder_sequences.append(torch.tensor(source_ids, dtype=torch.long))
+        decoder_input_sequences.append(
+            torch.tensor([bos_id] + target_ids[:-1], dtype=torch.long)
+        )
+        decoder_target_sequences.append(torch.tensor(target_ids, dtype=torch.long))
+        decoder_starts.append([bos_id])
+
+    encoder_ids = pad_sequence(
+        encoder_sequences, batch_first=True, padding_value=PAD_IDX
+    )
+    encoder_mask = (encoder_ids != PAD_IDX).long()
+
+    decoder_inputs = pad_sequence(
+        decoder_input_sequences, batch_first=True, padding_value=PAD_IDX
+    )
+    decoder_targets = pad_sequence(
+        decoder_target_sequences, batch_first=True, padding_value=PAD_IDX
+    )
+    initial_decoder_inputs = torch.tensor(decoder_starts, dtype=torch.long)
+
+    return encoder_ids, encoder_mask, decoder_inputs, decoder_targets, initial_decoder_inputs
 
 def test_collate_fn(batch):
     '''
@@ -69,8 +115,17 @@ def test_collate_fn(batch):
         * encoder_mask: Mask of shape BxT associated with padding tokens in the encoder input
         * initial_decoder_inputs: The very first input token to be decoder (only to be used in evaluation)
     '''
-    # TODO
-    return [], [], []
+    encoder_sequences = []
+    decoder_starts = []
+    for source_ids, _, bos_id in batch:
+        encoder_sequences.append(torch.tensor(source_ids, dtype=torch.long))
+        decoder_starts.append([bos_id])
+        
+    encoder_ids = pad_sequence(encoder_sequences, batch_first=True, padding_value=PAD_IDX)
+    encoder_mask = (encoder_ids != PAD_IDX).long()
+    initial_decoder_inputs = torch.tensor(decoder_starts, dtype=torch.long)
+    
+    return encoder_ids, encoder_mask, initial_decoder_inputs
 
 def get_dataloader(batch_size, split):
     data_folder = 'data'
@@ -96,5 +151,9 @@ def load_lines(path):
     return lines
 
 def load_prompting_data(data_folder):
-    # TODO
+    train_x = load_lines(f"{data_folder}/train.nl")
+    train_y = load_lines(f"{data_folder}/train.sql")
+    dev_x = load_lines(f"{data_folder}/dev.nl")
+    dev_y = load_lines(f"{data_folder}/dev.sql")
+    test_x = load_lines(f"{data_folder}/test.nl")
     return train_x, train_y, dev_x, dev_y, test_x
