@@ -25,7 +25,7 @@ def read_split(split):
 
 def preprocess_example(question, query):
     # Apply the same text preprocessing used in your T5 training pipeline.
-    return question, query
+    return question.strip(), query.strip()
 
 
 def token_stats(texts, tokenizer):
